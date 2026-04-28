@@ -1,0 +1,14 @@
+.idea/
+docker-configs/
+k8s/
+node-modules/
+public/
+src/
+http/
+
+.dockerignore
+.gitignore
+*.iml
+
+README.md
+mvnw*
