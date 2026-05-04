@@ -1,5 +1,8 @@
-export const BACKEND_URL = "http://localhost:8091"; // adjust if needed
+export const BACKEND_URL = "http://localhost:8091";
 
+// -----------------------------
+// Upload APIs (unchanged)
+// -----------------------------
 export async function uploadKnowledgeFile(file) {
     const formData = new FormData();
     formData.append("file", file);
@@ -8,46 +11,95 @@ export async function uploadKnowledgeFile(file) {
         method: "POST",
         body: formData
     });
+
     if (!response.ok) {
         throw new Error("Failed to upload knowledge");
     }
 }
 
-// Upload by URL
 export async function uploadKnowledgeUrl(url) {
     const response = await fetch(`${BACKEND_URL}/api/v1/load-url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url })
     });
+
     if (!response.ok) {
         throw new Error("Failed to upload knowledge from URL");
     }
 }
 
-export async function newConversation(sessionId, question) {
-    const response = await fetch(`${BACKEND_URL}/api/v1/chat?sessionId=${sessionId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question })
-    });
-    if (!response.ok) {
-        throw new Error("Failed to process question");
-    }
-    return await response.text();
+// -----------------------------
+// ✅ SSE: Open subscription
+// -----------------------------
+export function subscribeToQuestion(conversationId, questionId, onMessage, onError) {
+    const eventSource = new EventSource(
+        `${BACKEND_URL}/api/v1/sse/subscription/${conversationId}/${questionId}`
+    );
+
+    eventSource.onmessage = (event) => {
+        if (!event.data) return;
+
+        try {
+            const parsed = JSON.parse(event.data);
+            onMessage(parsed, eventSource);
+        } catch (e) {
+            console.error("SSE parse error", e);
+            onError?.(e, eventSource);
+        }
+    };
+
+    eventSource.onerror = (err) => {
+        console.error("SSE connection error", err);
+        onError?.(err, eventSource);
+        eventSource.close();
+    };
+
+    return eventSource;
 }
 
-export async function inquire(sessionId, question) {
-    const response = await fetch(`${BACKEND_URL}/api/v1/${sessionId}/question`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question })
-    });
-    if (!response.ok) {
-        throw new Error("Failed to ask question");
-    }
-    const data = await response.json();
+// -----------------------------
+// ✅ SSE: Trigger processing
+// -----------------------------
+export async function triggerQuestion(conversationId, questionId) {
+    const response = await fetch(
+        `${BACKEND_URL}/api/v1/sse/question?conversationId=${conversationId}&questionId=${questionId}`
+    );
 
-    // data is: { sessionId: '...', content: '...' }
-    return data;
+    if (!response.ok) {
+        throw new Error("Failed to trigger question processing");
+    }
 }
+
+// -----------------------------
+// ✅ Optional: Retry / warmup endpoint
+// -----------------------------
+export async function getQuestionSSE(conversationId, questionId) {
+    const response = await fetch(
+        `${BACKEND_URL}/api/v1/sse/question?conversationId=${conversationId}&questionId=${questionId}`
+    );
+
+    return response;
+}
+
+// -----------------------------
+// ✅ Cancel subscription
+// -----------------------------
+export async function deleteSubscription(conversationId, questionId) {
+    const response = await fetch(
+        `${BACKEND_URL}/api/v1/sse/subscription/${conversationId}/${questionId}`,
+        {
+            method: "DELETE"
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error("Failed to cancel subscription");
+    }
+}
+
+// -----------------------------
+// ❌ REMOVE (no longer valid with SSE)
+// -----------------------------
+// export async function inquire(...) ❌
+// export async function newConversation(...) ❌

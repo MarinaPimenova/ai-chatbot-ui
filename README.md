@@ -47,3 +47,10 @@ Frontend URL: http://localhost:5173
 ```shell
 npm run build
 ```
+
+# Correct SSE flow
+
+1. Open EventSource (subscribe)
+2. Call /sse/question (trigger processing)
+3. Server pushes result via SSE
+
