@@ -1,50 +1,59 @@
 import { useState } from "react";
-import { uploadKnowledgeFile, uploadKnowledgeUrl } from "../api";
+import { uploadKnowledgeFile } from "../api";
 
 function AdminUpload() {
     const [file, setFile] = useState(null);
-    const [url, setUrl] = useState("");
+    const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState("");
 
-    const handleFileUpload = async () => {
+    const handleUpload = async () => {
         if (!file) return;
+
+        setLoading(true);
+        setStatus("");
+
         try {
             await uploadKnowledgeFile(file);
-            setStatus("File upload successful!");
-        } catch (error) {
-            setStatus("File upload failed: " + error.message);
-        }
-    };
-
-    const handleUrlUpload = async () => {
-        if (!url) return;
-        try {
-            await uploadKnowledgeUrl(url);
-            setStatus("URL upload successful!");
-        } catch (error) {
-            setStatus("URL upload failed: " + error.message);
+            setStatus("Uploaded ✔");
+            setFile(null);
+        } catch (err) {
+            setStatus("Upload failed ❌");
+        } finally {
+            setLoading(false);
         }
     };
 
     return (
-        <div className="admin-upload">
-            <h2>Admin Upload Knowledge</h2>
+        <div className="upload-bar">
+            {/* CLIP BUTTON */}
+            <label className="upload-btn">
+                📎
+                <input
+                    type="file"
+                    hidden
+                    onChange={(e) => {
+                        const selected = e.target.files?.[0] || null;
+                        setFile(selected);
+                        setStatus("");
+                    }}
+                />
+            </label>
 
-            <h4>Upload File</h4>
-            <input type="file" onChange={(e) => setFile(e.target.files?.[0])} />
-            <button onClick={handleFileUpload}>Upload File</button>
+            {/* FILE NAME DISPLAY */}
+            <div className="file-name">
+                {file ? file.name : "No file selected"}
+            </div>
 
-            <h4>Or Provide URL</h4>
-            <input
-                type="text"
-                placeholder="https://www.microsoft.com/investor/reports/ar24/index.html"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                style={{ width: "100%", marginBottom: "10px" }}
-            />
-            <button onClick={handleUrlUpload}>Upload URL</button>
+            {/* UPLOAD BUTTON */}
+            <button
+                onClick={handleUpload}
+                disabled={!file || loading}
+            >
+                {loading ? "Uploading..." : "Upload"}
+            </button>
 
-            {status && <p>{status}</p>}
+            {/* STATUS */}
+            {status && <span className="status">{status}</span>}
         </div>
     );
 }

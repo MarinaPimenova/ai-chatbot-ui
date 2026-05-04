@@ -1,52 +1,366 @@
-import { useEffect, useState } from "react";
-import {inquire} from "../api";
+import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { deleteSubscription, BACKEND_URL } from "../api";
 
 function ChatWindow() {
     const [sessionId, setSessionId] = useState("");
     const [question, setQuestion] = useState("");
     const [messages, setMessages] = useState([]);
 
+    const eventSourceRef = useRef(null);
+    const bottomRef = useRef(null);
+
+    // ⏱ 3-min timeout guard
+    const typingTimeoutRef = useRef(null);
+
+    // -------------------------
+    // INIT SESSION
+    // -------------------------
     useEffect(() => {
         let savedSession = localStorage.getItem("sessionId");
+
         if (!savedSession) {
-            savedSession = 1;
+            savedSession = crypto.randomUUID();
+            localStorage.setItem("sessionId", savedSession);
         }
+
         setSessionId(savedSession);
     }, []);
 
-    const sendQuestion = async (q) => {
+    // -------------------------
+    // AUTO SCROLL
+    // -------------------------
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({
+            behavior: "smooth",
+        });
+    }, [messages]);
+
+    // -------------------------
+    // MESSAGE FACTORY
+    // -------------------------
+    const createMessage = (role, content = "", status = "done") => ({
+        id: crypto.randomUUID(),
+        role,
+        content,
+        status,
+        timestamp: Date.now(),
+    });
+
+    // -------------------------
+    // SSE CONNECTION (WITH TIMEOUT)
+    // -------------------------
+    const startSSE = (conversationId, questionId) => {
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+        }
+
+        // clear previous timeout
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+        }
+
+        const es = new EventSource(
+            `${BACKEND_URL}/api/v1/sse/subscription/${conversationId}/${questionId}`
+        );
+
+        eventSourceRef.current = es;
+
+        // ⏱ 3-minute timeout safety
+        typingTimeoutRef.current = setTimeout(() => {
+            console.warn("SSE timeout (3 min)");
+
+            es.close();
+            handleError("Response timeout (3 min)");
+        }, 180000);
+
+        es.onmessage = (event) => {
+            if (!event.data) return;
+
+            try {
+                const parsed = JSON.parse(event.data);
+
+                if (parsed.statusCodeValue === 200) {
+                    const answer =
+                        parsed.body?.answer ||
+                        parsed.body?.content ||
+                        "No response";
+
+                    setMessages((prev) => {
+                        const updated = [...prev];
+                        const lastIndex = updated.length - 1;
+
+                        if (updated[lastIndex]?.role === "assistant") {
+                            updated[lastIndex] = {
+                                ...updated[lastIndex],
+                                content: answer,
+                                status: "done",
+                            };
+                        }
+
+                        return updated;
+                    });
+
+                    clearTimeout(typingTimeoutRef.current);
+                    typingTimeoutRef.current = null;
+
+                    es.close();
+                }
+            } catch (e) {
+                console.error("Parse error", e);
+                handleError("Parsing error");
+
+                clearTimeout(typingTimeoutRef.current);
+                typingTimeoutRef.current = null;
+
+                es.close();
+            }
+        };
+
+        es.onerror = () => {
+            handleError("Connection error");
+
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+
+            es.close();
+        };
+    };
+
+    // -------------------------
+    // CREATE QUESTION
+    // -------------------------
+    const createQuestion = async (conversationId, questionText) => {
+        const res = await fetch(
+            `${BACKEND_URL}/api/v1/question?conversationId=${conversationId}`,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ question: questionText }),
+            }
+        );
+
+        if (!res.ok) {
+            throw new Error("Failed to create question");
+        }
+
+        return await res.json();
+    };
+
+    // -------------------------
+    // TRIGGER BACKEND
+    // -------------------------
+    const triggerBackendProcessing = async (conversationId, questionId) => {
+        const res = await fetch(
+            `${BACKEND_URL}/api/v1/sse/question?conversationId=${conversationId}&questionId=${questionId}`
+        );
+
+        if (!res.ok) {
+            throw new Error("Backend trigger failed");
+        }
+    };
+
+    // -------------------------
+    // SEND QUESTION
+    // -------------------------
+    const sendQuestion = async () => {
+        if (!question.trim()) return;
+
+        const userQ = question;
+        const conversationId = sessionId;
+
+        // clear timeout safely
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+        }
+
         try {
-            const userQ = q || question;
+            setMessages((prev) => [
+                ...prev,
+                createMessage("user", userQ),
+                createMessage("assistant", "", "streaming"),
+            ]);
 
-            const data = await inquire(sessionId, userQ);
-
-            const answer = data.content;
-            localStorage.setItem("sessionId", data.sessionId);
-            const newMessages = [...messages, { role: "user", content: userQ }, { role: "assistant", content: answer }];
-            setMessages(newMessages.slice(-10)); // Keep only latest 10
             setQuestion("");
+
+            const questionResponse = await createQuestion(
+                conversationId,
+                userQ
+            );
+
+            const questionId = questionResponse.questionId;
+
+            startSSE(conversationId, questionId);
+
+            await triggerBackendProcessing(conversationId, questionId);
         } catch (error) {
-            alert(error);
             console.error(error);
+            handleError("Failed to send question");
+        }
+    };
+
+    // -------------------------
+    // CANCEL
+    // -------------------------
+    const cancelSubscription = async () => {
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+        }
+
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+        }
+
+        try {
+            await deleteSubscription(sessionId, "latest");
+            handleError("Request cancelled");
+        } catch (e) {
+            console.error("Cancel failed", e);
+        }
+    };
+
+    // -------------------------
+    // ERROR HANDLING
+    // -------------------------
+    const handleError = (msg) => {
+        setMessages((prev) => {
+            const updated = [...prev];
+            const lastIndex = updated.length - 1;
+
+            if (updated[lastIndex]?.role === "assistant") {
+                updated[lastIndex] = {
+                    ...updated[lastIndex],
+                    content: `⚠️ ${msg}`,
+                    status: "error",
+                };
+            } else {
+                updated.push(
+                    createMessage("assistant", `⚠️ ${msg}`, "error")
+                );
+            }
+
+            return updated;
+        });
+    };
+
+    // -------------------------
+    // RETRY LOGIC
+    // -------------------------
+    const retryLastQuestion = async () => {
+        const lastUserMsg = [...messages]
+            .reverse()
+            .find((m) => m.role === "user");
+
+        if (!lastUserMsg) return;
+
+        const userQ = lastUserMsg.content;
+        const conversationId = sessionId;
+
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+        }
+
+        try {
+            setMessages((prev) => [
+                ...prev,
+                createMessage("assistant", "", "streaming"),
+            ]);
+
+            const questionResponse = await createQuestion(
+                conversationId,
+                userQ
+            );
+
+            const questionId = questionResponse.questionId;
+
+            startSSE(conversationId, questionId);
+
+            await triggerBackendProcessing(
+                conversationId,
+                questionId
+            );
+        } catch (error) {
+            console.error(error);
+            handleError("Retry failed");
+        }
+    };
+
+    // -------------------------
+    // ENTER KEY
+    // -------------------------
+    const handleKeyDown = (e) => {
+        if (e.key === "Enter") {
+            sendQuestion();
         }
     };
 
     return (
         <div className="chat-window">
-            <h2>Chat: AI Assistant</h2>
+            <h2>AI Assistant</h2>
+
             <div className="messages">
-                {messages.map((msg, idx) => (
-                    <div key={idx} className={msg.role}>
-                        <strong>{msg.role}({sessionId}):</strong> {msg.content}
-                        {msg.role === "user" && (
-                            <button onClick={() => sendQuestion(msg.content)}>Resend</button>
-                        )}
+                {messages.map((msg) => (
+                    <div
+                        key={msg.id}
+                        className={`message ${msg.role} ${msg.status}`}
+                    >
+                        <div className="bubble">
+                            <div className="content">
+                                <ReactMarkdown>
+                                    {msg.content}
+                                </ReactMarkdown>
+                            </div>
+
+                            <div className="meta">
+                                {msg.status === "streaming" && (
+                                    <span className="typing">
+                                        typing...
+                                    </span>
+                                )}
+
+                                {msg.status === "error" && (
+                                    <button
+                                        className="retry-btn"
+                                        onClick={retryLastQuestion}
+                                    >
+                                        ↻ Retry
+                                    </button>
+                                )}
+
+                                <span>
+                                    {new Date(
+                                        msg.timestamp
+                                    ).toLocaleTimeString()}
+                                </span>
+                            </div>
+                        </div>
                     </div>
                 ))}
+
+                <div ref={bottomRef} />
             </div>
+
             <div className="chat-input">
-                <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask a question..." />
-                <button onClick={() => sendQuestion(question)}>Send</button>
+                <input
+                    value={question}
+                    onChange={(e) =>
+                        setQuestion(e.target.value)
+                    }
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask anything..."
+                />
+
+                <button onClick={sendQuestion}>Send</button>
+
+                <button
+                    onClick={cancelSubscription}
+                    className="cancel-btn"
+                >
+                    Cancel
+                </button>
             </div>
         </div>
     );
