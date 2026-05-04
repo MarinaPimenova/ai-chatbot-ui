@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { deleteSubscription, BACKEND_URL } from "../api";
 
 function ChatWindow() {
@@ -7,6 +8,7 @@ function ChatWindow() {
     const [messages, setMessages] = useState([]);
 
     const eventSourceRef = useRef(null);
+    const bottomRef = useRef(null);
 
     // -------------------------
     // INIT SESSION
@@ -23,14 +25,32 @@ function ChatWindow() {
     }, []);
 
     // -------------------------
+    // AUTO SCROLL
+    // -------------------------
+    useEffect(() => {
+        bottomRef.current?.scrollIntoView({
+            behavior: "smooth",
+        });
+    }, [messages]);
+
+    // -------------------------
+    // CREATE MESSAGE
+    // -------------------------
+    const createMessage = (role, content = "", status = "done") => ({
+        id: crypto.randomUUID(),
+        role,
+        content,
+        status,
+        timestamp: Date.now(),
+    });
+
+    // -------------------------
     // SSE CONNECTION
     // -------------------------
     const startSSE = (conversationId, questionId) => {
         if (eventSourceRef.current) {
             eventSourceRef.current.close();
         }
-
-        console.log("👉 SSE SUBSCRIBE:", conversationId, questionId);
 
         const es = new EventSource(
             `${BACKEND_URL}/api/v1/sse/subscription/${conversationId}/${questionId}`
@@ -46,20 +66,26 @@ function ChatWindow() {
 
                 if (parsed.statusCodeValue === 200) {
                     const answer =
-                        parsed.body?.answer || parsed.body?.content;
+                        parsed.body?.answer ||
+                        parsed.body?.content ||
+                        "No response";
 
                     setMessages((prev) => {
                         const updated = [...prev];
                         const lastIndex = updated.length - 1;
 
-                        if (updated[lastIndex]?.role === "assistant") {
+                        if (
+                            updated[lastIndex] &&
+                            updated[lastIndex].role === "assistant"
+                        ) {
                             updated[lastIndex] = {
-                                role: "assistant",
+                                ...updated[lastIndex],
                                 content: answer,
+                                status: "done",
                             };
                         }
 
-                        return updated.slice(-10);
+                        return updated.slice(-20);
                     });
                 }
 
@@ -71,15 +97,14 @@ function ChatWindow() {
             }
         };
 
-        es.onerror = (err) => {
-            console.error("SSE error", err);
+        es.onerror = () => {
             handleError("Connection error");
             es.close();
         };
     };
 
     // -------------------------
-    // STEP 1: CREATE QUESTION (IMPORTANT FIX)
+    // CREATE QUESTION
     // -------------------------
     const createQuestion = async (conversationId, questionText) => {
         const res = await fetch(
@@ -89,7 +114,9 @@ function ChatWindow() {
                 headers: {
                     "Content-Type": "application/json",
                 },
-                body: JSON.stringify({ question: questionText }),
+                body: JSON.stringify({
+                    question: questionText,
+                }),
             }
         );
 
@@ -97,15 +124,16 @@ function ChatWindow() {
             throw new Error("Failed to create question");
         }
 
-        return await res.json(); // QuestionResponse
+        return await res.json();
     };
 
     // -------------------------
-    // STEP 3: TRIGGER PROCESSING
+    // TRIGGER BACKEND
     // -------------------------
-    const triggerBackendProcessing = async (conversationId, questionId) => {
-        console.log("👉 Trigger backend processing");
-
+    const triggerBackendProcessing = async (
+        conversationId,
+        questionId
+    ) => {
         const res = await fetch(
             `${BACKEND_URL}/api/v1/sse/question?conversationId=${conversationId}&questionId=${questionId}`
         );
@@ -116,25 +144,23 @@ function ChatWindow() {
     };
 
     // -------------------------
-    // SEND QUESTION FLOW (FIXED ORDER)
+    // SEND QUESTION
     // -------------------------
-    const sendQuestion = async (q) => {
-        const userQ = q || question;
+    const sendQuestion = async () => {
+        if (!question.trim()) return;
+
+        const userQ = question;
         const conversationId = sessionId;
 
         try {
-            console.log("👉 SEND CLICKED");
-
-            // 1. UI update FIRST
             setMessages((prev) => [
                 ...prev,
-                { role: "user", content: userQ },
-                { role: "assistant", content: "Thinking... 🤔" },
+                createMessage("user", userQ),
+                createMessage("assistant", "Thinking...", "streaming"),
             ]);
 
-            // -------------------------
-            // STEP 1: CREATE QUESTION
-            // -------------------------
+            setQuestion("");
+
             const questionResponse = await createQuestion(
                 conversationId,
                 userQ
@@ -142,19 +168,12 @@ function ChatWindow() {
 
             const questionId = questionResponse.questionId;
 
-            console.log("👉 QUESTION CREATED:", questionId);
-
-            // -------------------------
-            // STEP 2: OPEN SSE
-            // -------------------------
             startSSE(conversationId, questionId);
 
-            // -------------------------
-            // STEP 3: TRIGGER PROCESSING
-            // -------------------------
-            await triggerBackendProcessing(conversationId, questionId);
-
-            setQuestion("");
+            await triggerBackendProcessing(
+                conversationId,
+                questionId
+            );
         } catch (error) {
             console.error(error);
             handleError("Failed to send question");
@@ -171,49 +190,98 @@ function ChatWindow() {
 
         try {
             await deleteSubscription(sessionId, "latest");
+            handleError("Request cancelled");
         } catch (e) {
             console.error("Cancel failed", e);
         }
     };
 
+    // -------------------------
+    // ERROR HANDLING
+    // -------------------------
     const handleError = (msg) => {
         setMessages((prev) => {
             const updated = [...prev];
-            updated[updated.length - 1] = {
-                role: "assistant",
-                content: msg,
-            };
+            const lastIndex = updated.length - 1;
+
+            if (updated[lastIndex]?.role === "assistant") {
+                updated[lastIndex] = {
+                    ...updated[lastIndex],
+                    content: `⚠️ ${msg}`,
+                    status: "error",
+                };
+            }
+
             return updated;
         });
     };
 
+    // -------------------------
+    // ENTER KEY
+    // -------------------------
+    const handleKeyDown = (e) => {
+        if (e.key === "Enter") {
+            sendQuestion();
+        }
+    };
+
     return (
         <div className="chat-window">
-            <h2>Chat: AI Assistant</h2>
+            <h2>AI Assistant</h2>
 
             <div className="messages">
-                {messages.map((msg, idx) => (
-                    <div key={idx} className={msg.role}>
-                        <strong>
-                            {msg.role} ({sessionId}):
-                        </strong>{" "}
-                        {msg.content}
+                {messages.map((msg) => (
+                    <div
+                        key={msg.id}
+                        className={`message ${msg.role} ${msg.status}`}
+                    >
+                        <div className="bubble">
+                            <div className="content">
+                                <ReactMarkdown>
+                                    {msg.content}
+                                </ReactMarkdown>
+                            </div>
+
+                            <div className="meta">
+                                {msg.status === "streaming" && (
+                                    <span className="typing">
+                                        typing...
+                                    </span>
+                                )}
+
+                                <span>
+                                    {new Date(
+                                        msg.timestamp
+                                    ).toLocaleTimeString()}
+                                </span>
+                            </div>
+                        </div>
                     </div>
                 ))}
+
+                <div ref={bottomRef} />
             </div>
 
             <div className="chat-input">
                 <input
                     value={question}
-                    onChange={(e) => setQuestion(e.target.value)}
-                    placeholder="Ask a question..."
+                    onChange={(e) =>
+                        setQuestion(e.target.value)
+                    }
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask anything..."
                 />
 
-                <button onClick={() => sendQuestion(question)}>
+                <button onClick={sendQuestion}>
                     Send
                 </button>
 
-                <button onClick={cancelSubscription}>Cancel</button>
+                <button
+                    onClick={cancelSubscription}
+                    className="cancel-btn"
+                >
+                    Cancel
+                </button>
             </div>
         </div>
     );

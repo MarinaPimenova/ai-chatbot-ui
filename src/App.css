@@ -1,43 +1,181 @@
-.app {
-  font-family: Arial, sans-serif;
-  padding: 20px;
-}
-
-.admin-upload, .chat-window {
-  margin-bottom: 30px;
-  padding: 20px;
-  border: 1px solid #ccc;
-  border-radius: 5px;
+.chat-window {
+    max-width: 800px;
+    margin: auto;
+    display: flex;
+    flex-direction: column;
+    height: 80vh;
+    border: 1px solid #ddd;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #f9fafb;
 }
 
 .messages {
-  margin-bottom: 15px;
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
-.user, .assistant {
-  margin-bottom: 10px;
+.message {
+    display: flex;
 }
 
-.user {
-  text-align: right;
-  color: blue;
+.message.user {
+    justify-content: flex-end;
 }
 
-.assistant {
-  text-align: left;
-  color: green;
+.message.assistant {
+    justify-content: flex-start;
+}
+
+.bubble {
+    max-width: 70%;
+    padding: 12px 14px;
+    border-radius: 14px;
+    background: white;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.message.user .bubble {
+    background: #2563eb;
+    color: white;
+}
+
+.content {
+    white-space: pre-wrap;
+    line-height: 1.4;
+}
+
+.meta {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+.typing {
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+    0%, 100% { opacity: 0.2; }
+    50% { opacity: 1; }
 }
 
 .chat-input {
-  display: flex;
-  gap: 10px;
+    display: flex;
+    padding: 12px;
+    border-top: 1px solid #eee;
+    gap: 8px;
+    background: white;
 }
 
 .chat-input input {
-  flex-grow: 1;
-  padding: 8px;
+    flex: 1;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #ddd;
 }
 
 .chat-input button {
-  padding: 8px 16px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: none;
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+}
+
+.upload-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    background: #fafafa;
+}
+
+.upload-btn {
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.url-input {
+    flex: 1;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid #ddd;
+}
+
+.upload-bar button {
+    padding: 6px 10px;
+    border: none;
+    border-radius: 6px;
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+}
+
+.upload-bar button:disabled {
+    opacity: 0.5;
+}
+
+.status {
+    font-size: 12px;
+    color: #666;
+}
+
+.upload-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border-bottom: 1px solid #eee;
+    background: #fafafa;
+}
+
+.upload-btn {
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.file-name {
+    flex: 1;
+    font-size: 13px;
+    color: #444;
+    background: #fff;
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    border-radius: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.upload-bar button {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 6px;
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+}
+
+.upload-bar button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.status {
+    font-size: 12px;
+    color: #666;
+}
+
+.message.user .bubble {
+    background: #eef2ff;
+    color: #3730a3;
 }

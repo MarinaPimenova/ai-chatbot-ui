@@ -1,102 +1,59 @@
 import { useState } from "react";
-import { uploadKnowledgeFile, uploadKnowledgeUrl } from "../api";
+import { uploadKnowledgeFile } from "../api";
 
 function AdminUpload() {
     const [file, setFile] = useState(null);
-    const [url, setUrl] = useState("");
     const [loading, setLoading] = useState(false);
     const [status, setStatus] = useState("");
 
-    const reset = () => {
-        setFile(null);
-        setUrl("");
-    };
-
     const handleUpload = async () => {
-        if (!file && !url) {
-            setStatus("Please select a file or provide a URL.");
-            return;
-        }
+        if (!file) return;
 
         setLoading(true);
         setStatus("");
 
         try {
-            if (file) {
-                await uploadKnowledgeFile(file);
-                setStatus("✅ File uploaded successfully!");
-            } else {
-                await uploadKnowledgeUrl(url);
-                setStatus("✅ URL uploaded successfully!");
-            }
-
-            reset();
-        } catch (error) {
-            setStatus(
-                "❌ Upload failed: " + (error?.message || "Unknown error")
-            );
+            await uploadKnowledgeFile(file);
+            setStatus("Uploaded ✔");
+            setFile(null);
+        } catch (err) {
+            setStatus("Upload failed ❌");
         } finally {
             setLoading(false);
         }
     };
 
-    const isDisabled = loading || (!file && !url);
-
     return (
-        <div className="admin-upload">
-            <h2>Admin Upload Knowledge</h2>
-
-            {/* FILE UPLOAD */}
-            <div style={{ marginBottom: "20px" }}>
-                <h4>Upload File</h4>
+        <div className="upload-bar">
+            {/* CLIP BUTTON */}
+            <label className="upload-btn">
+                📎
                 <input
                     type="file"
-                    disabled={loading}
+                    hidden
                     onChange={(e) => {
-                        setUrl(""); // clear URL if file selected
-                        setFile(e.target.files?.[0] || null);
+                        const selected = e.target.files?.[0] || null;
+                        setFile(selected);
+                        setStatus("");
                     }}
                 />
+            </label>
+
+            {/* FILE NAME DISPLAY */}
+            <div className="file-name">
+                {file ? file.name : "No file selected"}
             </div>
 
-            {/* URL INPUT */}
-            <div style={{ marginBottom: "20px" }}>
-                <h4>Or Provide URL</h4>
-                <input
-                    type="text"
-                    placeholder="https://example.com/article"
-                    value={url}
-                    disabled={loading}
-                    onChange={(e) => {
-                        setFile(null); // clear file if URL entered
-                        setUrl(e.target.value);
-                    }}
-                    style={{
-                        width: "100%",
-                        padding: "8px",
-                    }}
-                />
-            </div>
-
-            {/* SINGLE ACTION BUTTON */}
+            {/* UPLOAD BUTTON */}
             <button
                 onClick={handleUpload}
-                disabled={isDisabled}
-                style={{
-                    padding: "10px 16px",
-                    cursor: isDisabled ? "not-allowed" : "pointer",
-                    opacity: isDisabled ? 0.5 : 1,
-                }}
+                disabled={!file || loading}
             >
-                {loading ? "Uploading..." : "Upload Knowledge"}
+                {loading ? "Uploading..." : "Upload"}
             </button>
 
             {/* STATUS */}
-            {status && (
-                <p style={{ marginTop: "10px" }}>
-                    {status}
-                </p>
-            )}
+            {status && <span className="status">{status}</span>}
         </div>
     );
 }
