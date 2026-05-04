@@ -10,6 +10,9 @@ function ChatWindow() {
     const eventSourceRef = useRef(null);
     const bottomRef = useRef(null);
 
+    // ⏱ 3-min timeout guard
+    const typingTimeoutRef = useRef(null);
+
     // -------------------------
     // INIT SESSION
     // -------------------------
@@ -34,7 +37,7 @@ function ChatWindow() {
     }, [messages]);
 
     // -------------------------
-    // CREATE MESSAGE
+    // MESSAGE FACTORY
     // -------------------------
     const createMessage = (role, content = "", status = "done") => ({
         id: crypto.randomUUID(),
@@ -45,11 +48,16 @@ function ChatWindow() {
     });
 
     // -------------------------
-    // SSE CONNECTION
+    // SSE CONNECTION (WITH TIMEOUT)
     // -------------------------
     const startSSE = (conversationId, questionId) => {
         if (eventSourceRef.current) {
             eventSourceRef.current.close();
+        }
+
+        // clear previous timeout
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
         }
 
         const es = new EventSource(
@@ -57,6 +65,14 @@ function ChatWindow() {
         );
 
         eventSourceRef.current = es;
+
+        // ⏱ 3-minute timeout safety
+        typingTimeoutRef.current = setTimeout(() => {
+            console.warn("SSE timeout (3 min)");
+
+            es.close();
+            handleError("Response timeout (3 min)");
+        }, 180000);
 
         es.onmessage = (event) => {
             if (!event.data) return;
@@ -74,10 +90,7 @@ function ChatWindow() {
                         const updated = [...prev];
                         const lastIndex = updated.length - 1;
 
-                        if (
-                            updated[lastIndex] &&
-                            updated[lastIndex].role === "assistant"
-                        ) {
+                        if (updated[lastIndex]?.role === "assistant") {
                             updated[lastIndex] = {
                                 ...updated[lastIndex],
                                 content: answer,
@@ -85,20 +98,31 @@ function ChatWindow() {
                             };
                         }
 
-                        return updated.slice(-20);
+                        return updated;
                     });
-                }
 
-                es.close();
+                    clearTimeout(typingTimeoutRef.current);
+                    typingTimeoutRef.current = null;
+
+                    es.close();
+                }
             } catch (e) {
                 console.error("Parse error", e);
                 handleError("Parsing error");
+
+                clearTimeout(typingTimeoutRef.current);
+                typingTimeoutRef.current = null;
+
                 es.close();
             }
         };
 
         es.onerror = () => {
             handleError("Connection error");
+
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+
             es.close();
         };
     };
@@ -111,12 +135,8 @@ function ChatWindow() {
             `${BACKEND_URL}/api/v1/question?conversationId=${conversationId}`,
             {
                 method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    question: questionText,
-                }),
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ question: questionText }),
             }
         );
 
@@ -130,10 +150,7 @@ function ChatWindow() {
     // -------------------------
     // TRIGGER BACKEND
     // -------------------------
-    const triggerBackendProcessing = async (
-        conversationId,
-        questionId
-    ) => {
+    const triggerBackendProcessing = async (conversationId, questionId) => {
         const res = await fetch(
             `${BACKEND_URL}/api/v1/sse/question?conversationId=${conversationId}&questionId=${questionId}`
         );
@@ -152,11 +169,17 @@ function ChatWindow() {
         const userQ = question;
         const conversationId = sessionId;
 
+        // clear timeout safely
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+        }
+
         try {
             setMessages((prev) => [
                 ...prev,
                 createMessage("user", userQ),
-                createMessage("assistant", "Thinking...", "streaming"),
+                createMessage("assistant", "", "streaming"),
             ]);
 
             setQuestion("");
@@ -170,10 +193,7 @@ function ChatWindow() {
 
             startSSE(conversationId, questionId);
 
-            await triggerBackendProcessing(
-                conversationId,
-                questionId
-            );
+            await triggerBackendProcessing(conversationId, questionId);
         } catch (error) {
             console.error(error);
             handleError("Failed to send question");
@@ -186,6 +206,11 @@ function ChatWindow() {
     const cancelSubscription = async () => {
         if (eventSourceRef.current) {
             eventSourceRef.current.close();
+        }
+
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
         }
 
         try {
@@ -210,10 +235,57 @@ function ChatWindow() {
                     content: `⚠️ ${msg}`,
                     status: "error",
                 };
+            } else {
+                updated.push(
+                    createMessage("assistant", `⚠️ ${msg}`, "error")
+                );
             }
 
             return updated;
         });
+    };
+
+    // -------------------------
+    // RETRY LOGIC
+    // -------------------------
+    const retryLastQuestion = async () => {
+        const lastUserMsg = [...messages]
+            .reverse()
+            .find((m) => m.role === "user");
+
+        if (!lastUserMsg) return;
+
+        const userQ = lastUserMsg.content;
+        const conversationId = sessionId;
+
+        if (typingTimeoutRef.current) {
+            clearTimeout(typingTimeoutRef.current);
+            typingTimeoutRef.current = null;
+        }
+
+        try {
+            setMessages((prev) => [
+                ...prev,
+                createMessage("assistant", "", "streaming"),
+            ]);
+
+            const questionResponse = await createQuestion(
+                conversationId,
+                userQ
+            );
+
+            const questionId = questionResponse.questionId;
+
+            startSSE(conversationId, questionId);
+
+            await triggerBackendProcessing(
+                conversationId,
+                questionId
+            );
+        } catch (error) {
+            console.error(error);
+            handleError("Retry failed");
+        }
     };
 
     // -------------------------
@@ -249,6 +321,15 @@ function ChatWindow() {
                                     </span>
                                 )}
 
+                                {msg.status === "error" && (
+                                    <button
+                                        className="retry-btn"
+                                        onClick={retryLastQuestion}
+                                    >
+                                        ↻ Retry
+                                    </button>
+                                )}
+
                                 <span>
                                     {new Date(
                                         msg.timestamp
@@ -272,9 +353,7 @@ function ChatWindow() {
                     placeholder="Ask anything..."
                 />
 
-                <button onClick={sendQuestion}>
-                    Send
-                </button>
+                <button onClick={sendQuestion}>Send</button>
 
                 <button
                     onClick={cancelSubscription}
