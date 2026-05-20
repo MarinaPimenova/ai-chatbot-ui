@@ -12,6 +12,7 @@ function ChatWindow() {
 
     // ⏱ 3-min timeout guard
     const typingTimeoutRef = useRef(null);
+    const currentQuestionIdRef = useRef(null);
 
     // -------------------------
     // INIT SESSION
@@ -25,6 +26,17 @@ function ChatWindow() {
         }
 
         setSessionId(savedSession);
+    }, []);
+    useEffect(() => {
+        return () => {
+            if (eventSourceRef.current) {
+                eventSourceRef.current.close();
+            }
+
+            if (typingTimeoutRef.current) {
+                clearTimeout(typingTimeoutRef.current);
+            }
+        };
     }, []);
 
     // -------------------------
@@ -51,11 +63,11 @@ function ChatWindow() {
     // SSE CONNECTION (WITH TIMEOUT)
     // -------------------------
     const startSSE = (conversationId, questionId) => {
+        let completed = false;
         if (eventSourceRef.current) {
             eventSourceRef.current.close();
         }
 
-        // clear previous timeout
         if (typingTimeoutRef.current) {
             clearTimeout(typingTimeoutRef.current);
         }
@@ -66,61 +78,112 @@ function ChatWindow() {
 
         eventSourceRef.current = es;
 
-        // ⏱ 3-minute timeout safety
+        // =========================
+        // OVERALL SAFETY TIMEOUT
+        // =========================
         typingTimeoutRef.current = setTimeout(() => {
-            console.warn("SSE timeout (3 min)");
+            console.warn("SSE overall timeout");
 
             es.close();
-            handleError("Response timeout (3 min)");
-        }, 180000);
 
-        es.onmessage = (event) => {
-            if (!event.data) return;
+            handleError("Response timeout");
+        }, 330000); // 5m30s
 
+        // =========================
+        // CONNECTED EVENT
+        // =========================
+        es.addEventListener("connected", (event) => {
+            console.log("SSE connected", event.data);
+        });
+
+        // =========================
+        // HEARTBEAT EVENT
+        // =========================
+        es.addEventListener("ping", (event) => {
+            console.log("heartbeat", event.data);
+        });
+
+        // =========================
+        // SUCCESS EVENT
+        // =========================
+        es.addEventListener("data", (event) => {
             try {
-                const parsed = JSON.parse(event.data);
+                let parsed;
 
-                if (parsed.statusCodeValue === 200) {
-                    const answer =
-                        parsed.body?.answer ||
-                        parsed.body?.content ||
-                        "No response";
-
-                    setMessages((prev) => {
-                        const updated = [...prev];
-                        const lastIndex = updated.length - 1;
-
-                        if (updated[lastIndex]?.role === "assistant") {
-                            updated[lastIndex] = {
-                                ...updated[lastIndex],
-                                content: answer,
-                                status: "done",
-                            };
-                        }
-
-                        return updated;
-                    });
-
-                    clearTimeout(typingTimeoutRef.current);
-                    typingTimeoutRef.current = null;
-
-                    es.close();
+                try {
+                    parsed = JSON.parse(event.data);
+                } catch {
+                    parsed = event.data;
                 }
-            } catch (e) {
-                console.error("Parse error", e);
-                handleError("Parsing error");
+
+                const answer =
+                    parsed.answer ||
+                    parsed.content ||
+                    parsed.body?.answer ||
+                    "No response";
+
+                setMessages((prev) => {
+                    const updated = [...prev];
+
+                    const lastIndex = updated.length - 1;
+
+                    if (updated[lastIndex]?.role === "assistant") {
+                        updated[lastIndex] = {
+                            ...updated[lastIndex],
+                            content: answer,
+                            status: "done",
+                        };
+                    }
+
+                    return updated;
+                });
 
                 clearTimeout(typingTimeoutRef.current);
+
                 typingTimeoutRef.current = null;
+                completed = true;
+                es.close();
+            } catch (e) {
+                console.error("Failed parsing SSE response", e);
+
+                handleError("Parsing error");
 
                 es.close();
             }
-        };
+        });
 
-        es.onerror = () => {
-            handleError("Connection error");
+        // =========================
+        // ERROR EVENT FROM SERVER
+        // =========================
+        es.addEventListener("server-error", (event) => {
+            console.error("Server SSE error", event);
+            completed = true;
+            const errorMessage =
+                event.data || "Server processing error";
+
+            handleError(errorMessage);
 
             clearTimeout(typingTimeoutRef.current);
+
+            typingTimeoutRef.current = null;
+
+            es.close();
+        });
+
+        // =========================
+        // NETWORK ERROR
+        // =========================
+        es.onerror = (event) => {
+            if (completed) {
+                return;
+            }
+
+            console.error("EventSource transport error", event);
+
+            handleError("Connection lost");
+
+            clearTimeout(typingTimeoutRef.current);
+
             typingTimeoutRef.current = null;
 
             es.close();
@@ -190,6 +253,7 @@ function ChatWindow() {
             );
 
             const questionId = questionResponse.questionId;
+            currentQuestionIdRef.current = questionId;
 
             startSSE(conversationId, questionId);
 
@@ -214,7 +278,7 @@ function ChatWindow() {
         }
 
         try {
-            await deleteSubscription(sessionId, "latest");
+            await deleteSubscription(sessionId, currentQuestionIdRef.current);
             handleError("Request cancelled");
         } catch (e) {
             console.error("Cancel failed", e);
