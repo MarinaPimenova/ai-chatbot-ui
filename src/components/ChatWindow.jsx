@@ -102,7 +102,6 @@ function ChatWindow() {
         es.addEventListener("ping", (event) => {
             console.log("heartbeat", event.data);
         });
-
         // =========================
         // SUCCESS EVENT
         // =========================
